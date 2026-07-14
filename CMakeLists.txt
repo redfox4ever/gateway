@@ -7,5 +7,5 @@ project(gateway)
 
 include(${ZEPHYR_BASE}/samples/subsys/usb/common/common.cmake)
 target_include_directories(app PRIVATE src/)
-FILE(GLOB gateway_sources src/*.c)
+FILE(GLOB gateway_sources src/main.c)
 target_sources(app PRIVATE ${gateway_sources})

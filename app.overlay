@@ -3,33 +3,39 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-
+/* 
 &zephyr_udc0 {
 	cdc_acm_uart0: cdc_acm_uart0 {
 		compatible = "zephyr,cdc-acm-uart";
 		label = "Zephyr USB CDC-ACM";
 	};
 };
-
+*/
  
-&usart2 {
- 	
-	pinctrl-0 = <&usart2_tx_pa2 &usart2_rx_pa3 &usart2_cts_pa0 &usart2_rts_pa1>;
-	pinctrl-names = "default";
-	current-speed = <1000000>;
-	hw-flow-control;
-	status = "okay"; 
 
-	bt_hci_uart: bt_hci_uart {
-		compatible = "zephyr,bt-hci-uart";
-		status = "okay";
-	};
+
+
+
+
+&usart3 {
+    status = "okay";
+    current-speed = <115200>;
+    
+    pinctrl-0 = <&usart3_tx_pb10 &usart3_rx_pb11 &usart3_cts_pb13 &usart3_rts_pb14>;
+    pinctrl-names = "default";
+	hw-flow-control;
+
+    bt_hci_uart: bt_hci_uart {
+        compatible = "zephyr,bt-hci-uart";
+        status = "okay";
+    };
 };
 
 / {
     chosen {
-        zephyr,console = &cdc_acm_uart0;
+        //zephyr,console = &cdc_acm_uart0;
 //		zephyr,shell-uart= &cdc_acm_uart0;
 		zephyr,bt-hci = &bt_hci_uart;
+		
     };
 };
