@@ -1,0 +1,4 @@
+#ifndef EXTERNAL_FIRMWARE_UPDATE_H
+#define EXTERNAL_FIRMWARE_UPDATE_H
+extern int start_firmware_update;
+#endif

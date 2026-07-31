@@ -339,9 +339,21 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 };
 
 
-
+#include <zephyr/storage/flash_map.h>
 int main(void)
 {
+    const struct flash_area *image_update_partition;
+	int erro;
+    erro = flash_area_open(PARTITION_ID(image_update_partition), &image_update_partition);
+    if (erro)
+    {
+        printf("failed to open image_update_partition\n");
+        return 1;
+    }
+    else
+    {
+        printf("image_update_partition is open.\n");
+    }
 	
 	/*
 	static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
@@ -361,11 +373,18 @@ int main(void)
     }
 	start_scan();
 	snprintk(msg, MSG_MAX_LEN, "hello");
+
+	// main loop
 	while(true){
 		k_sleep(K_SECONDS(1));
-		if(default_conn && msg_ready){
-			
-			bt_gatt_write(default_conn, &msg_write_params);
+
+		if(default_conn ){
+			if(msg_ready)	bt_gatt_write(default_conn, &msg_write_params);
+
+			// initiating firmware update
+			if(start_firmware_update){
+				start_firmware_update = 0;
+			}
 		}	
 	}
 	

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-/* 
+/*
 &zephyr_udc0 {
 	cdc_acm_uart0: cdc_acm_uart0 {
 		compatible = "zephyr,cdc-acm-uart";
@@ -11,7 +11,27 @@
 	};
 };
 */
- 
+
+
+// separating flash0 into partitions
+
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        code_partition: partition@0 {
+            label = "app";
+            reg = <0x00000000 DT_SIZE_K(256)>;
+        };
+
+        image_update_partition: partition@40000 {
+            label = "image_update_partition";
+            reg = <0x00040000 DT_SIZE_K(768)>;
+        };
+    };
+};
 
 
 
@@ -20,7 +40,7 @@
 &usart3 {
     status = "okay";
     current-speed = <115200>;
-    
+
     pinctrl-0 = <&usart3_tx_pb10 &usart3_rx_pb11 &usart3_cts_pb13 &usart3_rts_pb14>;
     pinctrl-names = "default";
 	hw-flow-control;
@@ -36,6 +56,7 @@
         //zephyr,console = &cdc_acm_uart0;
 //		zephyr,shell-uart= &cdc_acm_uart0;
 		zephyr,bt-hci = &bt_hci_uart;
-		
+        zephyr,code-partition = &code_partition;
+
     };
 };
