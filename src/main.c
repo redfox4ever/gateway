@@ -16,6 +16,7 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/sys/byteorder.h>
+#include <command.h>
 // LOG_MODULE_REGISTER(main_log, LOG_LEVEL_INF);
 static void start_scan(void);
 
@@ -42,6 +43,14 @@ BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef5));
 // message characteristic 
 static const struct bt_uuid_128 vnd_msg_uuid = BT_UUID_INIT_128(
 	BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef6));
+
+const struct bt_uuid_128 vnd_cmd_uuid = BT_UUID_INIT_128(
+	BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef7));
+
+static const struct bt_uuid_128 vnd_cmd_feedback_uuid = BT_UUID_INIT_128(
+BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef8));
+
+
 #define MSG_MAX_LEN 32
 char msg[MSG_MAX_LEN + 1] = {0};
 uint16_t msg_attr_handle;
@@ -96,6 +105,14 @@ static uint8_t notify_func(struct bt_conn *conn,
 	return BT_GATT_ITER_CONTINUE;
 }
 
+enum subscribe_target {
+    SUBSCRIBE_TARGET_NONE,
+    SUBSCRIBE_TARGET_SENSOR,
+    SUBSCRIBE_TARGET_CMD_FEEDBACK,
+};
+static enum subscribe_target pending_subscribe_target = SUBSCRIBE_TARGET_NONE;
+
+bool discovery_complete = false;
 static uint8_t discover_func(struct bt_conn *conn,
 			     const struct bt_gatt_attr *attr,
 			     struct bt_gatt_discover_params *params)
@@ -132,35 +149,10 @@ static uint8_t discover_func(struct bt_conn *conn,
 		msg_attr_handle = bt_gatt_attr_value_handle(attr);
 		msg_write_params.handle = msg_attr_handle;
 		msg_ready = true;
-		return BT_GATT_ITER_STOP;
-	 	
-	} else if (!bt_uuid_cmp(discover_params.uuid,
-				&vnd_sensor_uuid.uuid)) {
-		memcpy(&discover_uuid, BT_UUID_GATT_CCC, sizeof(struct bt_uuid_16));
-		discover_params.uuid = &discover_uuid.uuid;
-		discover_params.start_handle = attr->handle + 2;
-		discover_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
-		subscribe_params.value_handle = bt_gatt_attr_value_handle(attr);
 
-		err = bt_gatt_discover(conn, &discover_params);
-		if (err) {
-			printk("Discover failed (err %d)\n", err);
-		}
-	} else //if 
-	//(!bt_uuid_cmp(discover_params.uuid, BT_UUID_GATT_CCC.uuid)) 
-	{
-		subscribe_params.notify = notify_func;
-		subscribe_params.value = BT_GATT_CCC_NOTIFY;
-		subscribe_params.ccc_handle = attr->handle;
 
-		err = bt_gatt_subscribe(conn, &subscribe_params);
-		if (err && err != -EALREADY) {
-			printk("Subscribe failed (err %d)\n", err);
-		} else {
-			printk("[SUBSCRIBED]\n");
-		}
-
-		memcpy(&discover_uuid, &vnd_msg_uuid, sizeof(discover_uuid));
+		// discover cmd
+		memcpy(&discover_uuid, &vnd_cmd_uuid, sizeof(discover_uuid));
 		discover_params.uuid = &discover_uuid.uuid;
 		discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
 		discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
@@ -169,6 +161,95 @@ static uint8_t discover_func(struct bt_conn *conn,
 		if (err) {
 			printk("Discover failed (err %d)\n", err);
 		}
+	 
+		// cmd
+	}  else if (!bt_uuid_cmp(discover_params.uuid,
+				&vnd_cmd_uuid.uuid)) {
+
+		 
+		cmd_write_params.handle = bt_gatt_attr_value_handle(attr);
+		
+		// redirect to cmd_feedback
+		memcpy(&discover_uuid, &vnd_cmd_feedback_uuid, sizeof(discover_uuid));
+		discover_params.uuid = &discover_uuid.uuid;
+		discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
+		discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+
+		err = bt_gatt_discover(conn, &discover_params);
+		if (err) {
+			printk("Discover failed (err %d)\n", err);
+		}
+
+		// cmd_feedback
+	}  else if (!bt_uuid_cmp(discover_params.uuid,
+				&vnd_cmd_feedback_uuid.uuid)) {
+
+		memcpy(&discover_uuid, BT_UUID_GATT_CCC, sizeof(struct bt_uuid_16));
+		discover_params.uuid = &discover_uuid.uuid;
+		discover_params.start_handle = attr->handle + 2;
+		discover_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
+		cmd_feedback_subscribe_params.value_handle = bt_gatt_attr_value_handle(attr);
+
+		pending_subscribe_target = SUBSCRIBE_TARGET_CMD_FEEDBACK;
+		err = bt_gatt_discover(conn, &discover_params);
+		if (err) {
+			printk("Discover failed (err %d)\n", err);
+		}
+		// sensor
+	}	else if (!bt_uuid_cmp(discover_params.uuid,
+				&vnd_sensor_uuid.uuid)) {
+		memcpy(&discover_uuid, BT_UUID_GATT_CCC, sizeof(struct bt_uuid_16));
+		discover_params.uuid = &discover_uuid.uuid;
+		discover_params.start_handle = attr->handle + 2;
+		discover_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
+		subscribe_params.value_handle = bt_gatt_attr_value_handle(attr);
+
+		pending_subscribe_target = SUBSCRIBE_TARGET_SENSOR; 
+		err = bt_gatt_discover(conn, &discover_params);
+		if (err) {
+			printk("Discover failed (err %d)\n", err);
+		}
+	} else //if 
+	//(!bt_uuid_cmp(discover_params.uuid, BT_UUID_GATT_CCC.uuid)) 
+	{
+		if(pending_subscribe_target == SUBSCRIBE_TARGET_SENSOR){
+			subscribe_params.notify = notify_func;
+			subscribe_params.value = BT_GATT_CCC_NOTIFY;
+			subscribe_params.ccc_handle = attr->handle;
+
+			err = bt_gatt_subscribe(conn, &subscribe_params);
+			if (err && err != -EALREADY) {
+				printk("Subscribe failed (err %d)\n", err);
+			} else {
+				printk("[SUBSCRIBED] sensor notification\n");
+			}
+
+			memcpy(&discover_uuid, &vnd_msg_uuid, sizeof(discover_uuid));
+			discover_params.uuid = &discover_uuid.uuid;
+			discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
+			discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+
+			err = bt_gatt_discover(conn, &discover_params);
+			if (err) {
+				printk("Discover failed (err %d)\n", err);
+
+			}
+		}
+		else if(pending_subscribe_target == SUBSCRIBE_TARGET_CMD_FEEDBACK){
+			cmd_feedback_subscribe_params.notify = cmd_feedback_notify_func;
+			cmd_feedback_subscribe_params.value = BT_GATT_CCC_NOTIFY;
+			cmd_feedback_subscribe_params.ccc_handle = attr->handle;
+
+			err = bt_gatt_subscribe(conn, &cmd_feedback_subscribe_params);
+			if (err && err != -EALREADY) {
+				printk("Subscribe failed (err %d)\n", err);
+			} else {
+				printk("[SUBSCRIBED] to cmd feedback notification\n");
+			}
+
+			discovery_complete = true;
+		}
+		
 
 	}
 
@@ -329,7 +410,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	}
 
 	bt_conn_drop(&default_conn);
-
+	discovery_complete = false;
 	start_scan();
 }
 
@@ -374,16 +455,30 @@ int main(void)
 	start_scan();
 	snprintk(msg, MSG_MAX_LEN, "hello");
 
+	int start_firmware_update = 1;
+
 	// main loop
 	while(true){
 		k_sleep(K_SECONDS(1));
 
-		if(default_conn ){
+		if(default_conn && discovery_complete){
 			if(msg_ready)	bt_gatt_write(default_conn, &msg_write_params);
 
 			// initiating firmware update
 			if(start_firmware_update){
 				start_firmware_update = 0;
+				cmd = UPDATE_CMD;
+				bt_gatt_write(default_conn, &cmd_write_params);
+				printf("sent cmd.\n");
+				while(true){
+					//printf("waiting for cmd feedback...\n");
+					if(cmd_feedback == OTA_UPDATE_READY) {
+						printf("received cmd feedback confirmation.\n");
+						//consume flag
+						cmd_feedback = NO_FEEDBACK;
+						break;
+					}
+				}
 			}
 		}	
 	}
