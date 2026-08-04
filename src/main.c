@@ -17,6 +17,7 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/sys/byteorder.h>
 #include <command.h>
+#include <external_firmware_update.h>
 // LOG_MODULE_REGISTER(main_log, LOG_LEVEL_INF);
 static void start_scan(void);
 
@@ -50,6 +51,8 @@ const struct bt_uuid_128 vnd_cmd_uuid = BT_UUID_INIT_128(
 static const struct bt_uuid_128 vnd_cmd_feedback_uuid = BT_UUID_INIT_128(
 BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef8));
 
+static const struct bt_uuid_128 vnd_payload_size_uuid = BT_UUID_INIT_128(
+BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef9));
 
 #define MSG_MAX_LEN 32
 char msg[MSG_MAX_LEN + 1] = {0};
@@ -70,7 +73,7 @@ bool msg_ready = false;
 
 
 
-static struct bt_conn *default_conn;
+struct bt_conn *default_conn;
 
 uint64_t total_rx_count; /* This value is exposed to test code */
 static struct bt_uuid_128 discover_uuid = BT_UUID_INIT_128(0);
@@ -209,6 +212,16 @@ static uint8_t discover_func(struct bt_conn *conn,
 		if (err) {
 			printk("Discover failed (err %d)\n", err);
 		}
+
+	// discovering payloady_size
+	}  else if (!bt_uuid_cmp(discover_params.uuid,
+				&vnd_payload_size_uuid.uuid)) {
+
+		 
+		payload_size_write_params.handle = bt_gatt_attr_value_handle(attr);
+		
+		discovery_complete = true;
+
 	} else //if 
 	//(!bt_uuid_cmp(discover_params.uuid, BT_UUID_GATT_CCC.uuid)) 
 	{
@@ -247,7 +260,19 @@ static uint8_t discover_func(struct bt_conn *conn,
 				printk("[SUBSCRIBED] to cmd feedback notification\n");
 			}
 
-			discovery_complete = true;
+			// redirecting to discover payloay_size next
+			memcpy(&discover_uuid, &vnd_payload_size_uuid, sizeof(discover_uuid));
+			discover_params.uuid = &discover_uuid.uuid;
+			discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
+			discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+
+			err = bt_gatt_discover(conn, &discover_params);
+			if (err) {
+				printk("Discover failed (err %d)\n", err);
+
+			}
+
+			
 		}
 		
 
@@ -479,6 +504,7 @@ int main(void)
 						break;
 					}
 				}
+				firmware_update();
 			}
 		}	
 	}
