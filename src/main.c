@@ -391,6 +391,19 @@ static void start_scan(void)
 	printk("Scanning successfully started\n");
 }
 
+// 1. Declare the MTU exchange parameter struct
+static struct bt_gatt_exchange_params mtu_params;
+
+// 2. Define the callback function when the exchange finishes
+static void mtu_exchange_cb(struct bt_conn *conn, uint8_t err,
+			    struct bt_gatt_exchange_params *params)
+{
+	if (!err) {
+		printk("MTU exchange successful\n");
+	} else {
+		printk("MTU exchange failed (err %d)\n", err);
+	}
+}
 
 static void connected(struct bt_conn *conn, uint8_t conn_err)
 {
@@ -422,6 +435,13 @@ static void connected(struct bt_conn *conn, uint8_t conn_err)
 			printk("Discover failed(err %d)\n", err);
 			return;
 		}
+	}
+
+	// Trigger the MTU exchange
+	mtu_params.func = mtu_exchange_cb;
+	int rc = bt_gatt_exchange_mtu(conn, &mtu_params);
+	if (rc) {
+		printk("MTU exchange failed to initiate (err %d)\n", rc);
 	}
 }
 
