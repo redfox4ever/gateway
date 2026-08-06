@@ -124,6 +124,7 @@ void firmware_update(){
     }
 
     size_t image_size = PARTITION_SIZE(image_update_partition);
+    //size_t image_size = 50000;
     send_payload_size(image_size);
 
     // Setup
@@ -131,6 +132,7 @@ void firmware_update(){
     int32_t chunk_index = 0;
     bool finished_last_chunk = false;
     while(chunk_index < chunks_count){
+        if(chunk_index % 40 == 0) k_msleep(500);
         printf("Attempting external firmware update loop with index: %d\n", chunk_index);
         if(chunk_index == chunks_count -1) finished_last_chunk = true;
        struct PayloadChunk pc;

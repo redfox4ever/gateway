@@ -659,7 +659,7 @@ int main(void)
 					}
 				}
 				firmware_update();
-				gateway_is_connected = false;
+				//gateway_is_connected = false;
 				//bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 			}
 		}	
