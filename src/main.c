@@ -19,7 +19,7 @@
 #include <command.h>
 #include <external_firmware_update.h>
 // LOG_MODULE_REGISTER(main_log, LOG_LEVEL_INF);
-static void start_scan(void);
+static int start_scan(void);
 
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
@@ -53,6 +53,17 @@ BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef8));
 
 static const struct bt_uuid_128 vnd_payload_size_uuid = BT_UUID_INIT_128(
 BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef9));
+
+
+static const struct bt_uuid_128 vnd_payload_chunk_uuid = BT_UUID_INIT_128(
+BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef10));
+
+static const struct bt_uuid_128 vnd_payload_chunk_feedback_uuid = BT_UUID_INIT_128(
+BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef11));
+
+
+
+
 
 #define MSG_MAX_LEN 32
 char msg[MSG_MAX_LEN + 1] = {0};
@@ -112,6 +123,7 @@ enum subscribe_target {
     SUBSCRIBE_TARGET_NONE,
     SUBSCRIBE_TARGET_SENSOR,
     SUBSCRIBE_TARGET_CMD_FEEDBACK,
+	SUBSCRIBE_TARGET_PAYLOAD_CHUNK_FEEDBACK,
 };
 static enum subscribe_target pending_subscribe_target = SUBSCRIBE_TARGET_NONE;
 
@@ -218,10 +230,56 @@ static uint8_t discover_func(struct bt_conn *conn,
 				&vnd_payload_size_uuid.uuid)) {
 
 		 
-		payload_size_write_params.handle = bt_gatt_attr_value_handle(attr);
-		
-		discovery_complete = true;
+			payload_size_write_params.handle = bt_gatt_attr_value_handle(attr);
 
+			// redirecting to discover payload_chunk next
+			memcpy(&discover_uuid, &vnd_payload_chunk_uuid, sizeof(discover_uuid));
+			discover_params.uuid = &discover_uuid.uuid;
+			discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
+			discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+
+			err = bt_gatt_discover(conn, &discover_params);
+			if (err) {
+				printk("Discover failed (err %d)\n", err);
+
+			}
+		
+
+	// discovering payloady_chunk
+	}  else if (!bt_uuid_cmp(discover_params.uuid,
+				&vnd_payload_chunk_uuid.uuid)) {
+
+		 
+		payload_chunk_write_params.handle = bt_gatt_attr_value_handle(attr);
+		
+		// redirect to payload_chunk_feedback 
+		memcpy(&discover_uuid, &vnd_payload_chunk_feedback_uuid, sizeof(discover_uuid));
+		discover_params.uuid = &discover_uuid.uuid;
+		discover_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
+		discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+
+		err = bt_gatt_discover(conn, &discover_params);
+		if (err) {
+			printk("Discover failed (err %d)\n", err);
+		}
+
+	// discovering payloady_chunk_feedback
+	}  else if (!bt_uuid_cmp(discover_params.uuid,
+				&vnd_payload_chunk_feedback_uuid.uuid)) {
+
+		 
+		
+		memcpy(&discover_uuid, BT_UUID_GATT_CCC, sizeof(struct bt_uuid_16));
+		discover_params.uuid = &discover_uuid.uuid;
+		discover_params.start_handle = attr->handle + 2;
+		discover_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
+		payload_chunk_feedback_subscribe_params.value_handle = bt_gatt_attr_value_handle(attr);
+
+		pending_subscribe_target = SUBSCRIBE_TARGET_PAYLOAD_CHUNK_FEEDBACK;
+		err = bt_gatt_discover(conn, &discover_params);
+		if (err) {
+			printk("Discover failed (err %d)\n", err);
+		}
 	} else //if 
 	//(!bt_uuid_cmp(discover_params.uuid, BT_UUID_GATT_CCC.uuid)) 
 	{
@@ -275,12 +333,28 @@ static uint8_t discover_func(struct bt_conn *conn,
 			
 		}
 		
+		else if(pending_subscribe_target == SUBSCRIBE_TARGET_PAYLOAD_CHUNK_FEEDBACK){
+			payload_chunk_feedback_subscribe_params.notify = payload_chunk_feedback_notify_func;
+			payload_chunk_feedback_subscribe_params.value = BT_GATT_CCC_NOTIFY;
+			payload_chunk_feedback_subscribe_params.ccc_handle = attr->handle;
+
+			err = bt_gatt_subscribe(conn, &payload_chunk_feedback_subscribe_params);
+			if (err && err != -EALREADY) {
+				printk("Subscribe failed (err %d)\n", err);
+			} else {
+				printk("[SUBSCRIBED] to payload chunk feedback notification\n");
+			}
+
+			discovery_complete = true;
+			
+		}
 
 	}
 
 	return BT_GATT_ITER_STOP;
 }
 
+/*
 static bool eir_found(struct bt_data *data, void *user_data)
 {
 	bt_addr_le_t *addr = user_data;
@@ -344,7 +418,54 @@ static bool eir_found(struct bt_data *data, void *user_data)
 
 	return true;
 }
+*/
 
+static bool eir_found(struct bt_data *data, void *user_data)
+{
+    bt_addr_le_t *addr = user_data;
+    int i;
+
+    printk("[AD]: %u data_len %u\n", data->type, data->data_len);
+
+    switch (data->type) {
+    case BT_DATA_UUID128_SOME:
+    case BT_DATA_UUID128_ALL:
+        if (data->data_len % 16 != 0U) {
+            printk("AD malformed\n");
+            return true;
+        }
+
+        for (i = 0; i < data->data_len; i += 16) {
+            struct bt_le_conn_param *param;
+            struct bt_uuid_128 uuid128;
+            uuid128.uuid.type = BT_UUID_TYPE_128;
+            int err;
+
+            memcpy(&uuid128.val, &data->data[i], 16);
+            if (bt_uuid_cmp(&uuid128.uuid, &vnd_uuid.uuid)) {
+                continue;
+            }
+
+            err = bt_le_scan_stop();
+            if (err) {
+                printk("Stop LE scan failed (err %d)\n", err);
+                continue;
+            }
+
+            printk("Creating connection\n");
+            param = BT_LE_CONN_PARAM_DEFAULT;
+            err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN, param, &default_conn);
+            if (err) {
+                printk("Create connection failed (err %d)\n", err);
+                start_scan();
+            }
+
+            return false;
+        }
+    }
+
+    return true;
+}
 
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 			 struct net_buf_simple *ad)
@@ -362,7 +483,7 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 	}
 }
 
-static void start_scan(void)
+static int start_scan(void)
 {
 	int err;
 
@@ -370,13 +491,14 @@ static void start_scan(void)
 	 * devices that might update their advertising data at runtime. */
 	struct bt_le_scan_param scan_param = {
 		.type       = BT_LE_SCAN_TYPE_ACTIVE,
-		.options    = BT_LE_SCAN_OPT_CODED,
+		.options    = BT_LE_SCAN_OPT_NONE,
 		.interval   = BT_GAP_SCAN_FAST_INTERVAL,
 		.window     = BT_GAP_SCAN_FAST_WINDOW,
 	};
 
 	err = bt_le_scan_start(&scan_param, device_found);
 	if (err) {
+		/*
 		printk("Scanning with Coded PHY support failed (err %d)\n", err);
 
 		printk("Scanning without Coded PHY\n");
@@ -384,11 +506,15 @@ static void start_scan(void)
 		err = bt_le_scan_start(&scan_param, device_found);
 		if (err) {
 			printk("Scanning failed to start (err %d)\n", err);
-			return;
+			return -1;
 		}
+		*/
+	    printk("Scanning failed to start (err %d)\n", err);
+        return -1;
 	}
 
 	printk("Scanning successfully started\n");
+	return 0;
 }
 
 // 1. Declare the MTU exchange parameter struct
@@ -404,6 +530,9 @@ static void mtu_exchange_cb(struct bt_conn *conn, uint8_t err,
 		printk("MTU exchange failed (err %d)\n", err);
 	}
 }
+
+
+bool gateway_is_connected = false;
 
 static void connected(struct bt_conn *conn, uint8_t conn_err)
 {
@@ -443,10 +572,18 @@ static void connected(struct bt_conn *conn, uint8_t conn_err)
 	if (rc) {
 		printk("MTU exchange failed to initiate (err %d)\n", rc);
 	}
+	printf("gateway is connect!\n");
+	gateway_is_connected = true;
 }
+
+
+bool need_to_rescan = false;
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
+	gateway_is_connected = false;
+	need_to_rescan = true;
+
 	printk("Disconnected: %s, reason 0x%02x %s\n", bt_conn_dst_str(conn),
 	       reason, bt_hci_err_to_str(reason));
 
@@ -456,7 +593,10 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
 	bt_conn_drop(&default_conn);
 	discovery_complete = false;
-	start_scan();
+
+	printf("Disconnected call baby \n");
+
+
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -468,18 +608,7 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 #include <zephyr/storage/flash_map.h>
 int main(void)
 {
-    const struct flash_area *image_update_partition;
-	int erro;
-    erro = flash_area_open(PARTITION_ID(image_update_partition), &image_update_partition);
-    if (erro)
-    {
-        printf("failed to open image_update_partition\n");
-        return 1;
-    }
-    else
-    {
-        printf("image_update_partition is open.\n");
-    }
+
 	
 	/*
 	static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
@@ -506,7 +635,12 @@ int main(void)
 	while(true){
 		k_sleep(K_SECONDS(1));
 
-		if(default_conn && discovery_complete){
+		if(need_to_rescan){
+			need_to_rescan = false;
+			start_scan();
+		}
+		k_sleep(K_SECONDS(2));
+		if(gateway_is_connected){
 			if(msg_ready)	bt_gatt_write(default_conn, &msg_write_params);
 
 			// initiating firmware update
@@ -525,8 +659,11 @@ int main(void)
 					}
 				}
 				firmware_update();
+				gateway_is_connected = false;
+				//bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 			}
 		}	
+		printf("Back to main loop baby\n");
 	}
 	
 	return 0;
